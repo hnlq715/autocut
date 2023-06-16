@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import datetime
+from fractions import Fraction
 
 import srt
 from moviepy import editor
@@ -83,7 +84,7 @@ class Cutter:
             fns[ext if ext in fns else "media"] = fn
 
         assert fns["media"], "must provide a media filename"
-        assert fns["srt"], "must provide a srt filename"
+        assert fns["md"], "must provide a srt filename"
 
         is_video_file = utils.is_video(fns["media"])
         outext = "mp4" if is_video_file else "mp3"
@@ -91,28 +92,25 @@ class Cutter:
         if utils.check_exists(output_fn, self.args.force):
             return
 
-        with open(fns["srt"], encoding=self.args.encoding) as f:
-            subs = list(srt.parse(f.read()))
-
         if fns["md"]:
             md = utils.MD(fns["md"], self.args.encoding)
             if not md.done_editing():
                 return
-            index = []
+            subs = []
             for mark, sent in md.tasks():
                 if not mark:
                     continue
-                m = re.match(r"\[(\d+)", sent.strip())
-                if m:
-                    index.append(int(m.groups()[0]))
-            subs = [s for s in subs if s.index in index]
+
+                ss = sent.strip().split("|")
+                if len(ss) == 5:
+                    subs.append(srt.Subtitle(ss[1], datetime.timedelta(float(ss[2])), datetime.timedelta(float(ss[3])), ss[4]))
             logging.info(f'Cut {fns["media"]} based on {fns["srt"]} and {fns["md"]}')
         else:
             logging.info(f'Cut {fns["media"]} based on {fns["srt"]}')
 
         segments = []
         # Avoid disordered subtitles
-        subs = list(srt.sort_and_reindex(subs))
+        subs.sort(key=lambda x: x.start)
 
         for x in subs:
             if len(segments) == 0:
@@ -128,52 +126,57 @@ class Cutter:
                     )
 
         # update srt file
-        srtt = srt.compose(convert_subtitles(subs))
+        print(subs)
+        subs = convert_subtitles(subs)
+        print(subs)
+        srtt = srt.compose(subs)
         srtName = str(utils.change_ext(fns["media"], "srt"))
         with open(srtName, "w") as f:
             f.write(srtt)
 
-        if is_video_file:
-            media = editor.VideoFileClip(fns["media"])
-        else:
-            media = editor.AudioFileClip(fns["media"])
+        fcp_xml("Autocut", fns["media"], utils.change_ext(fns["media"], "fcpxml"), subs)
 
-        # Add a fade between two clips. Not quite necessary. keep code here for reference
-        # fade = 0
-        # segments = _expand_segments(segments, fade, 0, video.duration)
-        # clips = [video.subclip(
-        #         s['start'], s['end']).crossfadein(fade) for s in segments]
-        # final_clip = editor.concatenate_videoclips(clips, padding = -fade)
+        # if is_video_file:
+        #     media = editor.VideoFileClip(fns["media"])
+        # else:
+        #     media = editor.AudioFileClip(fns["media"])
 
-        clips = [media.subclip(s["start"], s["end"]) for s in segments]
-        if is_video_file:
-            final_clip: editor.VideoClip = editor.concatenate_videoclips(clips)
-            logging.info(
-                f"Reduced duration from {media.duration:.1f} to {final_clip.duration:.1f}"
-            )
+        # # Add a fade between two clips. Not quite necessary. keep code here for reference
+        # # fade = 0
+        # # segments = _expand_segments(segments, fade, 0, video.duration)
+        # # clips = [video.subclip(
+        # #         s['start'], s['end']).crossfadein(fade) for s in segments]
+        # # final_clip = editor.concatenate_videoclips(clips, padding = -fade)
 
-            aud = final_clip.audio.set_fps(44100)
-            final_clip = final_clip.without_audio().set_audio(aud)
-            final_clip = final_clip.fx(editor.afx.audio_normalize)
+        # clips = [media.subclip(s["start"], s["end"]) for s in segments]
+        # if is_video_file:
+        #     final_clip: editor.VideoClip = editor.concatenate_videoclips(clips)
+        #     logging.info(
+        #         f"Reduced duration from {media.duration:.1f} to {final_clip.duration:.1f}"
+        #     )
 
-            # an alternative to birate is use crf, e.g. ffmpeg_params=['-crf', '18']
-            final_clip.write_videofile(
-                output_fn, audio_codec="aac", bitrate=self.args.bitrate,
-                ffmpeg_params=['-filter_complex', "lut3d=/tmp/fix.cube,lut3d=/tmp/athena.cube,lut3d=/tmp/film.cube,subtitles=input.srt"]
-            )
-        else:
-            final_clip: editor.AudioClip = editor.concatenate_audioclips(clips)
-            logging.info(
-                f"Reduced duration from {media.duration:.1f} to {final_clip.duration:.1f}"
-            )
+        #     aud = final_clip.audio.set_fps(44100)
+        #     final_clip = final_clip.without_audio().set_audio(aud)
+        #     final_clip = final_clip.fx(editor.afx.audio_normalize)
 
-            final_clip = final_clip.fx(editor.afx.audio_normalize)
-            final_clip.write_audiofile(
-                output_fn, codec="libmp3lame", fps=44100, bitrate=self.args.bitrate
-            )
+        #     # an alternative to birate is use crf, e.g. ffmpeg_params=['-crf', '18']
+        #     final_clip.write_videofile(
+        #         output_fn, audio_codec="aac", bitrate=self.args.bitrate,
+        #         ffmpeg_params=['-filter_complex', "lut3d=/tmp/fix.cube,lut3d=/tmp/athena.cube,lut3d=/tmp/film.cube,subtitles=input.srt"]
+        #     )
+        # else:
+        #     final_clip: editor.AudioClip = editor.concatenate_audioclips(clips)
+        #     logging.info(
+        #         f"Reduced duration from {media.duration:.1f} to {final_clip.duration:.1f}"
+        #     )
 
-        media.close()
-        logging.info(f"Saved media to {output_fn}")
+        #     final_clip = final_clip.fx(editor.afx.audio_normalize)
+        #     final_clip.write_audiofile(
+        #         output_fn, codec="libmp3lame", fps=44100, bitrate=self.args.bitrate
+        #     )
+
+        # media.close()
+        # logging.info(f"Saved media to {output_fn}")
 
 def convert_subtitles(subtitles: list[srt.Subtitle]):
     result = []
@@ -189,3 +192,113 @@ def convert_subtitles(subtitles: list[srt.Subtitle]):
         start_time += duration
     
     return result
+
+def fraction(_a: float, tb: Fraction) -> str:
+    if _a == 0:
+        return "0s"
+
+    a = Fraction(_a)
+    frac = Fraction(a, tb).limit_denominator()
+    num = frac.numerator
+    dem = frac.denominator
+
+    if dem < 3000:
+        factor = int(3000 / dem)
+
+        if factor == 3000 / dem:
+            num *= factor
+            dem *= factor
+        else:
+            # Good enough but has some error that are impacted at speeds such as 150%.
+            total = Fraction(0)
+            while total < frac:
+                total += Fraction(1, 30)
+            num = total.numerator
+            dem = total.denominator
+
+    return f"{num}/{dem}s"
+
+def indent(base: int, *lines: str) -> str:
+    new_lines = ""
+    for line in lines:
+        new_lines += ("\t" * base) + line + "\n"
+    return new_lines
+
+def fcp_xml(group_name: str, input: str, output: str, subs: list[srt.Subtitle]) -> None:
+    tb = 25
+    total_dur = subs[-1].end.total_seconds()
+    pathurl = input
+    #4k
+    width, height = 3840, 2160
+    name = os.path.basename(input)
+    colorspace = "1-1-1 (Rec. 709)"
+
+    with open(output, "w", encoding="utf-8") as outfile:
+        outfile.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        outfile.write("<!DOCTYPE fcpxml>\n\n")
+        outfile.write('<fcpxml version="1.9">\n')
+        outfile.write("\t<resources>\n")
+        outfile.write(
+            f'\t\t<format id="r1" name="FFVideoFormat{height}p{float(tb)}" '
+            f'frameDuration="{fraction(1, tb)}" '
+            f'width="{width}" height="{height}" '
+            f'colorSpace="{colorspace}"/>\n'
+        )
+        outfile.write(
+            f'\t\t<asset id="r2" name="{name}" start="0s" hasVideo="1" format="r1" '
+            'hasAudio="1" audioSources="1" audioChannels="2" '
+            f'duration="{fraction(total_dur, tb)}">\n'
+        )
+        outfile.write(
+            f'\t\t\t<media-rep kind="original-media" src="{pathurl}"></media-rep>\n'
+        )
+        outfile.write("\t\t</asset>\n")
+        outfile.write("\t</resources>\n")
+        outfile.write("\t<library>\n")
+        outfile.write(f'\t\t<event name="{group_name}">\n')
+        outfile.write(f'\t\t\t<project name="{name}">\n')
+        outfile.write(
+            indent(
+                4,
+                '<sequence format="r1" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">',
+                "\t<spine>",
+            )
+        )
+
+        last_dur = 0.0
+        for clip in subs:
+
+            clip_dur = clip.end - clip.start
+            dur = fraction(clip_dur.total_seconds(), tb)
+
+            close = ""
+
+            if last_dur == 0:
+                outfile.write(
+                    indent(
+                        6,
+                        f'<asset-clip name="{name}" offset="0s" ref="r2" duration="{dur}" tcFormat="NDF"{close}>',
+                    )
+                )
+            else:
+                start = fraction(clip.start.total_seconds(), tb)
+                off = fraction(last_dur, tb)
+                outfile.write(
+                    indent(
+                        6,
+                        f'<asset-clip name="{name}" offset="{off}" ref="r2" '
+                        + f'duration="{dur}" start="{start}" '
+                        + f'tcFormat="NDF"{close}>',
+                    )
+                )
+
+            last_dur += clip_dur.total_seconds()
+
+        outfile.write("\t\t\t\t\t</spine>\n")
+        outfile.write("\t\t\t\t</sequence>\n")
+        outfile.write("\t\t\t</project>\n")
+        outfile.write("\t\t</event>\n")
+        outfile.write("\t</library>\n")
+        outfile.write("</fcpxml>\n")
+
+        logging.info(f"Saved fcpxml to {output}")

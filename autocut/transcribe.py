@@ -188,7 +188,8 @@ class Transcribe:
         )
 
         for s in subs:
-            sec = s.start.seconds
-            pre = f"[{s.index},{sec // 60:02d}:{sec % 60:02d}]"
-            md.add_task(False, f"{pre:11} {s.content.strip()}")
+            sec = s.start.total_seconds()
+            end = s.end.total_seconds()
+            pre = f"|{s.index}|{sec}|{end}|"
+            md.add_task(False, f"{pre:11}{s.content.strip()}")
         md.write()
