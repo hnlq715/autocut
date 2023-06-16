@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import datetime
 
 import srt
 from moviepy import editor
@@ -111,7 +112,8 @@ class Cutter:
 
         segments = []
         # Avoid disordered subtitles
-        subs.sort(key=lambda x: x.start)
+        subs = list(srt.sort_and_reindex(subs))
+
         for x in subs:
             if len(segments) == 0:
                 segments.append(
@@ -124,6 +126,12 @@ class Cutter:
                     segments.append(
                         {"start": x.start.total_seconds(), "end": x.end.total_seconds()}
                     )
+
+        # update srt file
+        srtt = srt.compose(convert_subtitles(subs))
+        srtName = str(utils.change_ext(fns["media"], "srt"))
+        with open(srtName, "w") as f:
+            f.write(srtt)
 
         if is_video_file:
             media = editor.VideoFileClip(fns["media"])
@@ -150,7 +158,8 @@ class Cutter:
 
             # an alternative to birate is use crf, e.g. ffmpeg_params=['-crf', '18']
             final_clip.write_videofile(
-                output_fn, audio_codec="aac", bitrate=self.args.bitrate
+                output_fn, audio_codec="aac", bitrate=self.args.bitrate,
+                ffmpeg_params=['-filter_complex', "lut3d=/tmp/fix.cube,lut3d=/tmp/athena.cube,lut3d=/tmp/film.cube,subtitles=input.srt"]
             )
         else:
             final_clip: editor.AudioClip = editor.concatenate_audioclips(clips)
@@ -165,3 +174,18 @@ class Cutter:
 
         media.close()
         logging.info(f"Saved media to {output_fn}")
+
+def convert_subtitles(subtitles: list[srt.Subtitle]):
+    result = []
+    start_time = datetime.timedelta(0)
+
+    for i, subtitle in enumerate(subtitles):
+        end_time = subtitle.end
+        subtitle_text = subtitle.content
+        
+        duration = end_time - subtitle.start
+        result.append(srt.Subtitle(i, start_time, start_time + duration, subtitle_text))
+        
+        start_time += duration
+    
+    return result
